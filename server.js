@@ -13,6 +13,20 @@ app.use(express.json());
 
 let db;
 
+  const parseIfNeeded = (value) => {
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch (e) {
+      console.warn("Kon JSON niet parsen:", value);
+      return [];
+    }
+  }
+  return value || [];
+  };
+
+
+
 const start = async () => {
   db = await mysql.createConnection({
     host: process.env.DB_HOST,
@@ -25,22 +39,36 @@ const start = async () => {
     res.status(200).json({ status: 'ok' });
   });
 
-  app.post("/toernooien", async (req, res) => {
-    console.log('Nieuwe toernooi ontvangen:', req.body);
-    const { datum, teams, matches, groups, groupMatches, finalMatches, groepsToernooi, repeatRounds } = req.body;
-    console.log('Nieuwe toernooi data:', { datum, teams, matches, groups, groupMatches, finalMatches, groepsToernooi, repeatRounds });
+  app.put("/toernooien/:id", async (req, res) => {
+    const { id } = req.params;
+    const {teams, matches, groups, groupMatches, finalMatches, groepsToernooi, repeatRounds } = req.body;
+    // console.log('Update toernooi ontvangen:', req.body);
+    // console.log('Update toernooi data:', {teams, matches, groups, groupMatches, finalMatches, groepsToernooi, repeatRounds });
+    try {
+      const sqlStr = 'UPDATE kraaktoernooien SET teams = ?, matches = ?, groups = ?, groupMatches = ?, finalMatches = ?, groepsToernooi = ?, repeatRounds = ? WHERE id = ?';
+      await db.execute(sqlStr, [
+        JSON.stringify(parseIfNeeded(teams)),
+        JSON.stringify(parseIfNeeded(matches)),
+        JSON.stringify(parseIfNeeded(groups)),
+        JSON.stringify(parseIfNeeded(groupMatches)),
+        JSON.stringify(parseIfNeeded(finalMatches)),
+        groepsToernooi ?? false,
+        repeatRounds ?? 1,
+        id
+      ]);
+      res.sendStatus(204);
+    } catch(error) {
+      console.error("Fout bij updaten toernooi:", error);
+      return res.status(500).json({ error: "Interne serverfout" });
+    }
+  });
 
-    const parseIfNeeded = (value) => {
-      if (typeof value === "string") {
-        try {
-          return JSON.parse(value);
-        } catch (e) {
-          console.warn("Kon JSON niet parsen:", value);
-          return [];
-        }
-      }
-      return value || [];
-    };
+
+
+  app.post("/toernooien", async (req, res) => {
+    // console.log('Nieuwe toernooi ontvangen:', req.body);
+    const { datum, teams, matches, groups, groupMatches, finalMatches, groepsToernooi, repeatRounds } = req.body;
+    // console.log('Nieuwe toernooi data:', { datum, teams, matches, groups, groupMatches, finalMatches, groepsToernooi, repeatRounds });
 
     let sqlStr = "INSERT INTO kraaktoernooien (datum, teams, groups, matches, groupMatches, finalMatches, groepsToernooi, repeatRounds) ";
     sqlStr += "VALUES(?, ?, ?, ?, ?, ?, ?, ?)";
@@ -104,7 +132,7 @@ const start = async () => {
       [id]
     );
     if (result.affectedRows === 0) {
-      console.log(`Toernooi met id ${id} niet gevonden`);
+      // console.log(`Toernooi met id ${id} niet gevonden`);
       return res.status(404).json({ error: "Toernooi niet gevonden" });
     }
     res.sendStatus(204);
@@ -140,24 +168,24 @@ const start = async () => {
     return result.insertId;
   }
 
-  async function getOrCreateTeam(speler1Id, speler2Id) {
+  async function isNewTeam(speler1Id, speler2Id) {
     // Zorg voor vaste volgorde (altijd laagste id eerst)
     const [id1, id2] = speler1Id < speler2Id
       ? [speler1Id, speler2Id]
       : [speler2Id, speler1Id];
 
     const [rows] = await db.execute(
-      `SELECT id FROM kraakTeams 
+      `SELECT * FROM kraakTeams 
      WHERE (speler1 = ? AND speler2 = ?) OR (speler1 = ? AND speler2 = ?)`,
       [id1, id2, id2, id1]
     );
-    if (rows.length > 0) return rows[0].id;
+    if (rows.length > 0) return false;
 
     const [result] = await db.execute(
       'INSERT INTO kraakTeams (speler1, speler2) VALUES (?, ?)',
       [id1, id2]
     );
-    return result.insertId;
+    return true;
   }
 
   async function getNaamById(id) {
@@ -170,7 +198,8 @@ const start = async () => {
     const teams = await Promise.all(rows.map(async row => ({
       team: `${await getNaamById(row.speler1)}/${await getNaamById(row.speler2)}`,
     })));
-    console.log(teams)
+    // console.log(teams)
+    teams.sort((a, b) => a.team.localeCompare(b.team));
     res.json(teams);
   });
 
@@ -197,8 +226,11 @@ const start = async () => {
         const sp1Id = await getOrCreatePlayer(sp1Naam);
         const sp2Id = await getOrCreatePlayer(sp2Naam);
 
-        const teamId = await getOrCreateTeam(sp1Id, sp2Id);
-        insertedTeamIds.push({ teamId, spelers: [sp1Naam, sp2Naam] });
+        const teamExists = await isNewTeam(sp1Id, sp2Id);
+        if (!teamExists) {
+          insertedTeamIds.push({ spelers: [sp1Naam, sp2Naam] });
+        }
+      
       } catch (err) {
         console.error(`Fout bij verwerken team ${sp1Naam} & ${sp2Naam}:`, err);
       }
@@ -253,7 +285,7 @@ const start = async () => {
     sqlStr += " JOIN kraaktoernooien tn ON tn.id = ktr.toernooiID ";
     sqlStr += " WHERE tn.id = ? ";
     sqlStr += " ORDER BY tn.datum, ktr.ronde, ktr.groep, ktr.tafel";
-    console.log("SQL:", sqlStr);
+    // console.log("SQL:", sqlStr);
     const [rows] = await db.execute(sqlStr, [toernooiID]);
     if (rows.length === 0) {
       return res
