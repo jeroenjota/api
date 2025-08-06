@@ -57,20 +57,31 @@ const start = async () => {
     // console.log('Nieuwe toernooi ontvangen:', req.body);
     const { datum, teams, matches, groups, groupMatches, finalMatches, groepsToernooi, repeatRounds } = req.body;
     // console.log('Nieuwe toernooi data:', { datum, teams, matches, groups, groupMatches, finalMatches, groepsToernooi, repeatRounds });
-
+    const [existing] = await pool.execute('SELECT * FROM kraaktoernooien WHERE datum = ?', [datum]);
+    if (existing.length > 0) {
+      return 
+    }
     let sqlStr = "INSERT INTO kraaktoernooien (datum, teams, groups, matches, groupMatches, finalMatches, groepsToernooi, repeatRounds) ";
     sqlStr += "VALUES(?, ?, ?, ?, ?, ?, ?, ?)";
-    await pool.execute(sqlStr, [
-      datum ?? null,
-      JSON.stringify(parseIfNeeded(teams)),
-      JSON.stringify(parseIfNeeded(groups)),
-      JSON.stringify(parseIfNeeded(matches)),
-      JSON.stringify(parseIfNeeded(groupMatches)),
-      JSON.stringify(parseIfNeeded(finalMatches)),
-      groepsToernooi ?? false,
-      repeatRounds ?? 1,
-    ]);
-    res.sendStatus(201);
+    try {
+      const [result] = await pool.execute(sqlStr, [
+        datum ?? null,
+        JSON.stringify(parseIfNeeded(teams)),
+        JSON.stringify(parseIfNeeded(groups)),
+        JSON.stringify(parseIfNeeded(matches)),
+        JSON.stringify(parseIfNeeded(groupMatches)),
+        JSON.stringify(parseIfNeeded(finalMatches)),
+        groepsToernooi ?? false,
+        repeatRounds ?? 1,
+      ]);
+      res.status(201).json({
+        message: "Toernooi succesvol aangemaakt",
+        id: result.insertId
+      });
+    } catch (error) {
+      console.error("Fout bij aanmaken toernooi:", error);
+      res.status(500).json({ error: "Interne serverfout" });
+    }
   });
 
   app.get("/toernooien", async (req, res) => {
@@ -118,7 +129,7 @@ const start = async () => {
       [id]
     );
     if (result.affectedRows === 0) {
-      // console.log(`Toernooi met id ${id} niet gevonden`);
+      console.log(`Toernooi met id ${id} niet gevonden`);
       return res.status(404).json({ error: "Toernooi niet gevonden" });
     }
     res.sendStatus(204);
@@ -151,7 +162,7 @@ const start = async () => {
         const teamRIndex = teams.indexOf(tafel.teamR);
         // console.log(`Team L index: ${teamLIndex}, Team R index: ${teamRIndex}`);
         if (teamLIndex === -1 || teamRIndex === -1) {
-          console.warn(`Team niet gevonden: ${match.teamL} of ${match.teamR}`);
+          console.warn(`Team niet gevonden: ${tafel.teamL} of ${tafel.teamR}`);
           return;
         }
         teamScores[teamLIndex].punten += tafel.scoreL;
